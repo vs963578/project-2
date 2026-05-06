@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.openai import OpenAISpeechToText
+import io
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -303,6 +305,47 @@ async def upload_transcript(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Could not read file as text.")
     return {"transcript": text, "filename": file.filename}
+
+
+AUDIO_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}
+MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB Whisper limit
+
+
+@api_router.post("/transcribe-audio")
+async def transcribe_audio(file: UploadFile = File(...)):
+    filename = file.filename or "audio"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio format '.{ext}'. Allowed: {', '.join(sorted(AUDIO_EXTENSIONS))}",
+        )
+
+    content = await file.read()
+    if len(content) == 0:
+        raise HTTPException(status_code=400, detail="Empty audio file.")
+    if len(content) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=400, detail="Audio file exceeds 25 MB Whisper limit.")
+
+    stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+    audio_buffer = io.BytesIO(content)
+    audio_buffer.name = filename  # whisper SDK uses the filename for format detection
+
+    try:
+        response = await stt.transcribe(
+            file=audio_buffer,
+            model="whisper-1",
+            response_format="json",
+        )
+    except Exception as e:
+        logger.exception("Whisper transcription failed")
+        raise HTTPException(status_code=502, detail=f"Transcription failed: {str(e)}")
+
+    text = getattr(response, "text", None) or (response.get("text") if isinstance(response, dict) else None)
+    if not text:
+        raise HTTPException(status_code=502, detail="Whisper returned empty transcript.")
+
+    return {"transcript": text, "filename": filename}
 
 
 app.include_router(api_router)

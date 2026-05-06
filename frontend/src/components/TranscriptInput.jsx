@@ -4,9 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
-import { Upload, Loader2, Sparkles, FileText } from "lucide-react";
+import { Upload, Loader2, Sparkles, FileText, Mic } from "lucide-react";
 import { toast } from "sonner";
-import { apiAnalyze, apiUpload } from "../lib/api";
+import { apiAnalyze, apiUpload, apiTranscribeAudio } from "../lib/api";
 
 const SAMPLE_TRANSCRIPT = `Agent: Hi, what do you want?
 Customer: My internet has been down for 3 days. I've called twice already and nobody has helped me.
@@ -23,7 +23,9 @@ export default function TranscriptInput({ onAnalyzed }) {
   const [agentName, setAgentName] = useState("");
   const [callId, setCallId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const fileRef = useRef(null);
+  const audioRef = useRef(null);
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
@@ -36,6 +38,33 @@ export default function TranscriptInput({ onAnalyzed }) {
       toast.success(`Loaded ${file.name}`);
     } catch (err) {
       toast.error("Failed to read file");
+    } finally {
+      e.target.value = "";
+    }
+  };
+
+  const handleAudio = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) {
+      toast.error("Audio file exceeds 25 MB limit");
+      e.target.value = "";
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    setTranscribing(true);
+    const t = toast.loading(`Transcribing ${file.name}...`);
+    try {
+      const data = await apiTranscribeAudio(fd);
+      setTranscript(data.transcript || "");
+      toast.success(`Transcribed ${file.name}`, { id: t });
+    } catch (err) {
+      const msg = err?.response?.data?.detail || "Transcription failed";
+      toast.error(typeof msg === "string" ? msg : "Transcription failed", { id: t });
+    } finally {
+      setTranscribing(false);
+      e.target.value = "";
     }
   };
 
@@ -130,20 +159,51 @@ export default function TranscriptInput({ onAnalyzed }) {
             className="hidden"
             data-testid="file-input"
           />
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => fileRef.current?.click()}
-            data-testid="upload-btn"
-            className="border-zinc-300"
-          >
-            <Upload className="w-4 h-4 mr-2" />
-            Upload .txt
-          </Button>
+          <input
+            ref={audioRef}
+            type="file"
+            accept=".mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm,audio/*"
+            onChange={handleAudio}
+            className="hidden"
+            data-testid="audio-input"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => fileRef.current?.click()}
+              data-testid="upload-btn"
+              className="border-zinc-300"
+              disabled={transcribing || loading}
+            >
+              <Upload className="w-4 h-4 mr-2" />
+              Upload .txt
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => audioRef.current?.click()}
+              data-testid="upload-audio-btn"
+              className="border-zinc-300"
+              disabled={transcribing || loading}
+            >
+              {transcribing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Transcribing...
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4 mr-2" />
+                  Upload audio
+                </>
+              )}
+            </Button>
+          </div>
           <Button
             type="button"
             onClick={handleAnalyze}
-            disabled={loading}
+            disabled={loading || transcribing}
             data-testid="analyze-call-button"
             className="bg-blue-600 hover:bg-blue-700 text-white transition-all duration-200 hover:-translate-y-0.5"
           >

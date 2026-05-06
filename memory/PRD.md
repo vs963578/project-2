@@ -14,12 +14,14 @@ Build an AI system for BPO Quality Assurance, Agent Coaching, and Performance An
 3. **Operations Manager** — reviews analytics dashboard, escalations, trends
 
 ## What's Implemented (Feb 2026)
-- POST `/api/analyze` — full LLM-driven QA evaluation, persisted in MongoDB
+- POST `/api/analyze` — full LLM-driven QA evaluation (GPT-5.2), persisted in MongoDB
 - POST `/api/upload-transcript` — .txt/.csv/.md upload to file picker
+- POST `/api/transcribe-audio` — **NEW** Audio (mp3/mp4/m4a/wav/webm/mpeg/mpga ≤25MB) → Whisper-1 transcription pipeline
 - GET `/api/evaluations` & `/api/evaluations/{id}` — history & detail
 - DELETE `/api/evaluations/{id}` — delete
 - GET `/api/analytics/summary` — aggregates: total_calls, avg sub-scores, escalation_rate, sentiment & risk breakdowns, top compliance issues, QA-score trend
 - Frontend: 3 tabs (Analyzer, History, Analytics) with score gauge, sub-score progress bars, coaching panel, manager insights, recharts visualizations
+- Frontend: **NEW** "Upload audio" button with progress toast → auto-fills transcript from Whisper
 - 100% backend & 100% frontend e2e test pass
 
 ## Backlog
