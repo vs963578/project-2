@@ -1,0 +1,122 @@
+{
+  "theme_and_archetype": {
+    "theme": "LIGHT",
+    "archetype": "Archetype 4: Swiss & High-Contrast",
+    "description": "Authority, Clarity, Truth. A function-first, data-heavy dashboard for BPO QA and coaching. It must feel objective, precise, and professional. It relies heavily on structure, typography, and contrast rather than decorative elements."
+  },
+  "colors": {
+    "background": {
+      "page": "bg-zinc-50",
+      "card": "bg-white",
+      "header": "bg-white/80 backdrop-blur-xl"
+    },
+    "text": {
+      "primary": "text-zinc-950",
+      "secondary": "text-zinc-600",
+      "muted": "text-zinc-400"
+    },
+    "accents": {
+      "primary": "bg-blue-600 text-white hover:bg-blue-700",
+      "success": "bg-green-600 text-white",
+      "success_subtle": "bg-green-100 text-green-800",
+      "warning": "bg-amber-500 text-white",
+      "warning_subtle": "bg-amber-100 text-amber-800",
+      "danger": "bg-red-600 text-white",
+      "danger_subtle": "bg-red-100 text-red-800"
+    },
+    "borders": {
+      "default": "border-zinc-200",
+      "focus": "ring-2 ring-blue-600 ring-offset-2"
+    },
+    "rules": [
+      "Never use pure black (#000000) or pure gray (#808080). Use zinc scale for a subtle blue/cool tint.",
+      "Primary CTA buttons must use the blue accent color.",
+      "Use subtle accent colors (e.g., success_subtle) for sentiment chips, risk level badges, and status indicators."
+    ]
+  },
+  "typography": {
+    "fonts": {
+      "headings": "Cabinet Grotesk (Import via @fontsource/cabinet-grotesk)",
+      "body": "IBM Plex Sans (Import via @fontsource/ibm-plex-sans)"
+    },
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl font-bold tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl sm:text-2xl font-semibold",
+      "h4": "text-lg font-semibold",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm text-zinc-600",
+      "overline": "text-xs font-semibold uppercase tracking-wider text-zinc-500"
+    },
+    "rules": [
+      "DO NOT use Inter or standard Sans for headings.",
+      "Headings must have tight letter spacing (tracking-tight).",
+      "Use font-medium or font-semibold for data labels to improve scanability."
+    ]
+  },
+  "layout_and_spacing": {
+    "grid_system": "The Control Room Grid",
+    "spacing_scale": "Tailwind standard (p-4, p-6, p-8). Generous padding inside cards (p-6).",
+    "structure": {
+      "page_wrapper": "min-h-screen bg-zinc-50 p-4 sm:p-6 lg:p-8",
+      "dashboard_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+      "cards": "bg-white border border-zinc-200 rounded-lg shadow-sm overflow-hidden"
+    },
+    "components": {
+      "summary_widget": "col-span-1 (For QA Score, Sentiment)",
+      "main_data": "col-span-2 or col-span-3 (For Transcript, Sub-scores)",
+      "side_panel": "col-span-1 (For Coaching Tips, Manager Insights)"
+    },
+    "rules": [
+      "Maintain strict grid hierarchy.",
+      "Use h-full on grid children to stretch and match heights.",
+      "Avoid heavy drop shadows; rely on 1px borders and shadow-sm for definition."
+    ]
+  },
+  "components_strategy": {
+    "buttons": "Flat, rounded-md, high contrast. Apply hover transition (e.g., hover:-translate-y-0.5) and focus rings.",
+    "cards": "Go mostly cardless inside the main workspace, but use strict border containers with p-6 for widgets.",
+    "inputs": "Shadcn UI Input and Textarea. Flat with subtle borders, strong focus rings.",
+    "badges": "Rounded-full px-2.5 py-0.5 text-xs font-semibold. Use subtle accent colors for Sentiment, Risk, and Compliance.",
+    "charts": "Use Recharts or Shadcn Charts. Keep axes clean, use solid colors (Blue, Green, Amber, Red).",
+    "libraries": {
+      "icons": "@phosphor-icons/react (Weight: regular or bold for active states)",
+      "animations": "framer-motion (for list staggering and card entrance)"
+    }
+  },
+  "motion_and_interactions": {
+    "hover": "Button hover should subtly darken bg (e.g., hover:bg-zinc-100 for ghosts, hover:bg-blue-700 for primary).",
+    "entrance": "Staggered fade-in-up for dashboard widgets and history lists.",
+    "transitions": "transition-all duration-200 ease-in-out for interactive elements."
+  },
+  "media_and_assets": {
+    "image_urls": [
+      {
+        "url": "https://images.unsplash.com/photo-1744956581253-abfd023141b1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBidXNpbmVzcyUyMGF2YXRhciUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODA3MjY3MXww&ixlib=rb-4.1.0&q=85",
+        "category": "agent_avatar",
+        "description": "Professional female agent portrait for user profile or history list"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1733348137479-2e726d326d9b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzd8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBidXNpbmVzcyUyMGF2YXRhciUyMHBvcnRyYWl0fGVufDB8fHx8MTc3ODA3MjY3MXww&ixlib=rb-4.1.0&q=85",
+        "category": "manager_avatar",
+        "description": "Professional manager portrait"
+      }
+    ],
+    "rules": "DO NOT use placeholders. If an image is needed for a user profile, use one of the provided URLs."
+  },
+  "accessibility_and_testing": {
+    "data_testids": "MUST include descriptive `data-testid` attributes on all buttons, form inputs, links, and major layout sections (e.g., `data-testid='qa-score-display'`, `data-testid='analyze-call-button'`).",
+    "contrast": "Ensure all text, especially within colored badges, meets WCAG AA contrast standards.",
+    "aria": "Use aria-labels on icon-only buttons."
+  },
+  "instructions_to_main_agent": [
+    "Install `@fontsource/cabinet-grotesk` and `@fontsource/ibm-plex-sans` and configure them in tailwind.config.js.",
+    "Install `@phosphor-icons/react` and `framer-motion`.",
+    "Implement the UI using Shadcn components where applicable (Cards, Buttons, Inputs, Badges, Progress bars).",
+    "Build a grid-based dashboard layout.",
+    "Include a Transcript Input Area (Textarea + Upload button).",
+    "Display the Main QA Score prominently (e.g., large circular gauge or large typography card).",
+    "Show Sub-scores using Progress bars (Shadcn Progress component).",
+    "Render AI Coaching, Root Cause, and Manager Insights in structured, easy-to-read cards."
+  ]
+}
