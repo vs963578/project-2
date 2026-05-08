@@ -17,6 +17,7 @@ import {
 } from "recharts";
 import { apiAnalytics } from "../lib/api";
 import { TrendingUp, AlertOctagon, BarChart3, Activity } from "lucide-react";
+import Leaderboard from "./Leaderboard";
 
 const StatCard = ({ label, value, suffix, icon: Icon, tone = "default" }) => {
   const toneClass =
@@ -207,6 +208,8 @@ export default function AnalyticsDashboard({ refreshKey }) {
           </CardContent>
         </Card>
       </div>
+
+      <Leaderboard refreshKey={refreshKey} />
     </div>
   );
 }

@@ -15,3 +15,6 @@ export const apiTranscribeAudio = (formData, onProgress) =>
     headers: { "Content-Type": "multipart/form-data" },
     onUploadProgress: onProgress,
   }).then(r => r.data);
+export const apiDiarize = (transcript) =>
+  axios.post(`${API}/diarize`, { transcript }).then(r => r.data);
+export const apiLeaderboard = () => axios.get(`${API}/analytics/leaderboard`).then(r => r.data);

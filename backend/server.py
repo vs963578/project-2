@@ -39,11 +39,24 @@ class AnalyzeRequest(BaseModel):
     call_id: Optional[str] = None
 
 
+class DiarizeRequest(BaseModel):
+    transcript: str
+
+
+class TalkRatio(BaseModel):
+    agent_words: int = 0
+    customer_words: int = 0
+    agent_pct: float = 0.0
+    customer_pct: float = 0.0
+
+
 class Evaluation(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     agent_name: str = "Unknown Agent"
     call_id: Optional[str] = None
     transcript: str
+    diarized_transcript: Optional[str] = None
+    talk_ratio: Optional[TalkRatio] = None
     qa_score: int
     greeting_score: int
     communication_score: int
@@ -139,6 +152,79 @@ def extract_json(text: str) -> dict:
         raise
 
 
+DIARIZE_SYSTEM_PROMPT = """You are a speaker diarization assistant for BPO call transcripts.
+
+Your job: take a raw, unlabeled call transcript and rewrite it so every utterance is prefixed with either "Agent:" or "Customer:" on its own line.
+
+Rules:
+- Identify each turn of speech and label it correctly based on context (greetings, problem statements, resolution language, support actions, etc.).
+- The agent typically: greets, asks verification questions, troubleshoots, offers solutions, follows compliance scripts.
+- The customer typically: states a problem, expresses frustration, asks questions, requests cancellation, etc.
+- Keep the original wording verbatim. Do NOT paraphrase, summarize, translate, or add new content.
+- Merge consecutive lines from the same speaker into one labeled turn.
+- If a line is already labeled (e.g. "Agent:" or "Customer:" or "Rep:" / "Caller:"), normalize to "Agent:" / "Customer:".
+- Output ONLY the diarized transcript. No commentary, no markdown, no code fences."""
+
+
+async def diarize_text(transcript: str) -> str:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=str(uuid.uuid4()),
+        system_message=DIARIZE_SYSTEM_PROMPT,
+    ).with_model("openai", "gpt-5.2")
+    msg = UserMessage(text=f"RAW TRANSCRIPT:\n\n{transcript}\n\nReturn the diarized transcript now.")
+    raw = await chat.send_message(msg)
+    out = raw if isinstance(raw, str) else str(raw)
+    out = out.strip()
+    if out.startswith("```"):
+        out = re.sub(r"^```(?:\w+)?\s*", "", out)
+        out = re.sub(r"\s*```$", "", out)
+    return out.strip()
+
+
+SPEAKER_LINE_RE = re.compile(r"^\s*(agent|customer|rep|representative|caller|client|cust)\s*[:\-]\s*(.*)$", re.IGNORECASE)
+
+
+def is_diarized(text: str) -> bool:
+    """Heuristic: at least 2 lines start with Agent:/Customer:."""
+    if not text:
+        return False
+    matches = 0
+    for line in text.splitlines():
+        if SPEAKER_LINE_RE.match(line):
+            matches += 1
+            if matches >= 2:
+                return True
+    return False
+
+
+def compute_talk_ratio(diarized: str) -> TalkRatio:
+    agent_words = 0
+    customer_words = 0
+    if not diarized:
+        return TalkRatio()
+    for line in diarized.splitlines():
+        m = SPEAKER_LINE_RE.match(line)
+        if not m:
+            continue
+        speaker = m.group(1).lower()
+        content = m.group(2).strip()
+        wc = len(re.findall(r"\b\w+\b", content))
+        if speaker in ("agent", "rep", "representative"):
+            agent_words += wc
+        else:
+            customer_words += wc
+    total = agent_words + customer_words
+    if total == 0:
+        return TalkRatio(agent_words=agent_words, customer_words=customer_words)
+    return TalkRatio(
+        agent_words=agent_words,
+        customer_words=customer_words,
+        agent_pct=round((agent_words / total) * 100, 1),
+        customer_pct=round((customer_words / total) * 100, 1),
+    )
+
+
 # ---------- Routes ----------
 @api_router.get("/")
 async def root():
@@ -150,6 +236,17 @@ async def analyze_call(req: AnalyzeRequest):
     if not req.transcript or len(req.transcript.strip()) < 10:
         raise HTTPException(status_code=400, detail="Transcript is too short to analyze.")
 
+    # Auto-diarize if not already labeled
+    diarized_text = req.transcript
+    if not is_diarized(req.transcript):
+        try:
+            diarized_text = await diarize_text(req.transcript)
+        except Exception:
+            logger.exception("Pre-analyze diarization failed; using raw transcript")
+            diarized_text = req.transcript
+
+    talk_ratio = compute_talk_ratio(diarized_text)
+
     session_id = str(uuid.uuid4())
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
@@ -157,7 +254,7 @@ async def analyze_call(req: AnalyzeRequest):
         system_message=SYSTEM_PROMPT,
     ).with_model("openai", "gpt-5.2")
 
-    user_msg = UserMessage(text=f"INPUT TRANSCRIPT:\n\n{req.transcript}\n\nReturn the JSON now.")
+    user_msg = UserMessage(text=f"INPUT TRANSCRIPT:\n\n{diarized_text}\n\nReturn the JSON now.")
 
     try:
         raw = await chat.send_message(user_msg)
@@ -175,6 +272,8 @@ async def analyze_call(req: AnalyzeRequest):
         agent_name=req.agent_name or "Unknown Agent",
         call_id=req.call_id,
         transcript=req.transcript,
+        diarized_transcript=diarized_text,
+        talk_ratio=talk_ratio,
         qa_score=int(data.get("qa_score", 0)),
         greeting_score=int(data.get("greeting_score", 0)),
         communication_score=int(data.get("communication_score", 0)),
@@ -297,6 +396,33 @@ async def analytics_summary():
     }
 
 
+@api_router.get("/analytics/leaderboard")
+async def analytics_leaderboard():
+    docs = await db.evaluations.find({}, {"_id": 0}).to_list(2000)
+    by_agent: dict = {}
+    for d in docs:
+        name = (d.get("agent_name") or "Unknown Agent").strip() or "Unknown Agent"
+        bucket = by_agent.setdefault(name, {"agent_name": name, "calls": 0, "qa_total": 0, "escalations": 0, "neg": 0})
+        bucket["calls"] += 1
+        bucket["qa_total"] += int(d.get("qa_score", 0) or 0)
+        if (d.get("escalation_required") or "no").lower() == "yes":
+            bucket["escalations"] += 1
+        if (d.get("sentiment") or "").lower() == "negative":
+            bucket["neg"] += 1
+    rows = []
+    for b in by_agent.values():
+        calls = b["calls"]
+        rows.append({
+            "agent_name": b["agent_name"],
+            "calls": calls,
+            "avg_qa": round(b["qa_total"] / calls, 1) if calls else 0,
+            "escalation_rate": round((b["escalations"] / calls) * 100, 1) if calls else 0,
+            "negative_rate": round((b["neg"] / calls) * 100, 1) if calls else 0,
+        })
+    rows.sort(key=lambda r: (r["avg_qa"], r["calls"]), reverse=True)
+    return {"leaderboard": rows}
+
+
 @api_router.post("/upload-transcript")
 async def upload_transcript(file: UploadFile = File(...)):
     content = await file.read()
@@ -311,8 +437,20 @@ AUDIO_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}
 MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB Whisper limit
 
 
+@api_router.post("/diarize")
+async def diarize(req: DiarizeRequest):
+    if not req.transcript or len(req.transcript.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Transcript is too short to diarize.")
+    try:
+        labeled = await diarize_text(req.transcript)
+    except Exception as e:
+        logger.exception("Diarization failed")
+        raise HTTPException(status_code=502, detail=f"Diarization error: {str(e)}")
+    return {"transcript": labeled}
+
+
 @api_router.post("/transcribe-audio")
-async def transcribe_audio(file: UploadFile = File(...)):
+async def transcribe_audio(file: UploadFile = File(...), diarize: bool = True):
     filename = file.filename or "audio"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in AUDIO_EXTENSIONS:
@@ -345,7 +483,15 @@ async def transcribe_audio(file: UploadFile = File(...)):
     if not text:
         raise HTTPException(status_code=502, detail="Whisper returned empty transcript.")
 
-    return {"transcript": text, "filename": filename}
+    diarized = False
+    if diarize and len(text.strip()) >= 10:
+        try:
+            text = await diarize_text(text)
+            diarized = True
+        except Exception:
+            logger.exception("Post-Whisper diarization failed; returning raw transcript")
+
+    return {"transcript": text, "filename": filename, "diarized": diarized}
 
 
 app.include_router(api_router)

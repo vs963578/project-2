@@ -4,9 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
-import { Upload, Loader2, Sparkles, FileText, Mic } from "lucide-react";
+import { Upload, Loader2, Sparkles, FileText, Mic, Wand2 } from "lucide-react";
 import { toast } from "sonner";
-import { apiAnalyze, apiUpload, apiTranscribeAudio } from "../lib/api";
+import { apiAnalyze, apiUpload, apiTranscribeAudio, apiDiarize } from "../lib/api";
 
 const SAMPLE_TRANSCRIPT = `Agent: Hi, what do you want?
 Customer: My internet has been down for 3 days. I've called twice already and nobody has helped me.
@@ -24,6 +24,7 @@ export default function TranscriptInput({ onAnalyzed }) {
   const [callId, setCallId] = useState("");
   const [loading, setLoading] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [labeling, setLabeling] = useState(false);
   const fileRef = useRef(null);
   const audioRef = useRef(null);
 
@@ -90,6 +91,25 @@ export default function TranscriptInput({ onAnalyzed }) {
     }
   };
 
+  const handleAutoLabel = async () => {
+    if (!transcript || transcript.trim().length < 10) {
+      toast.error("Add a transcript first.");
+      return;
+    }
+    setLabeling(true);
+    const t = toast.loading("Labeling speakers...");
+    try {
+      const data = await apiDiarize(transcript);
+      setTranscript(data.transcript || transcript);
+      toast.success("Speakers labeled", { id: t });
+    } catch (err) {
+      const msg = err?.response?.data?.detail || "Labeling failed";
+      toast.error(typeof msg === "string" ? msg : "Labeling failed", { id: t });
+    } finally {
+      setLabeling(false);
+    }
+  };
+
   return (
     <Card className="border-zinc-200 shadow-sm" data-testid="transcript-input-card">
       <CardHeader>
@@ -131,14 +151,33 @@ export default function TranscriptInput({ onAnalyzed }) {
             <Label htmlFor="transcript" className="text-xs uppercase tracking-wider font-semibold text-zinc-500">
               Transcript
             </Label>
-            <button
-              type="button"
-              className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-              onClick={() => setTranscript(SAMPLE_TRANSCRIPT)}
-              data-testid="load-sample-btn"
-            >
-              Load sample
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50 inline-flex items-center gap-1"
+                onClick={handleAutoLabel}
+                disabled={labeling || loading || transcribing}
+                data-testid="auto-label-btn"
+              >
+                {labeling ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" /> Labeling...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="w-3 h-3" /> Auto-label speakers
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                onClick={() => setTranscript(SAMPLE_TRANSCRIPT)}
+                data-testid="load-sample-btn"
+              >
+                Load sample
+              </button>
+            </div>
           </div>
           <Textarea
             id="transcript"

@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration 2 testing of new features (diarize, leaderboard, auto-diarize on analyze, talk_ratio, transcript viewer, copy coaching plan). Backend: ALL 20 tests PASSED (9 baseline + 11 new). Frontend: CRITICAL bug — EvaluationView.jsx is missing required imports (Button, Copy, toast) and never imports/renders TalkRatio or TranscriptViewer. The component throws 'Button is not defined' immediately when rendered, crashing the entire React tree (whitescreen) after Analyze Call. Auto-label-btn works correctly (diarize endpoint integrated). Leaderboard could not be visually verified because the crash unmounts the whole UI shell, but the API and component code look correct.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "EvaluationView.jsx",
+        "issue": "Renders <Button> and <Copy> (lucide icon) but never imports them; also calls toast.success/error without importing 'toast' from 'sonner'. Causes 'Button is not defined' page error and unmounts the entire app to a white screen as soon as an Evaluation is shown.",
+        "selector": "[data-testid=\"evaluation-view\"]",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "EvaluationView.jsx",
+        "issue": "TalkRatio and TranscriptViewer components are NOT imported and NOT rendered anywhere in EvaluationView. The review request states they should appear after analyze (talk-ratio-card, talk-ratio-bar, transcript-viewer data-testids), but these elements never mount. Feature is missing on UI even though backend returns talk_ratio and diarized_transcript correctly.",
+        "selector": "[data-testid=\"talk-ratio-card\"], [data-testid=\"transcript-viewer\"]",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Analyze Call -> EvaluationView render",
+        "issue": "Backend /api/analyze returns 200 with full payload (incl. diarized_transcript & talk_ratio), but the React tree throws on render so user sees blank page. Analytics tab/Leaderboard cannot be reached afterwards in the same session because the crash unmounts the entire <Dashboard/> including Tabs.",
+        "affected_selectors": ["[data-testid=\"evaluation-view\"]", "[data-testid=\"copy-coaching-plan-btn\"]", "[data-testid=\"talk-ratio-card\"]", "[data-testid=\"transcript-viewer\"]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_bpo_qa.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/pytest_new_features.xml"
+  ],
+  "action_items": [
+    "FIX EvaluationView.jsx imports: add `import { Button } from \"../components/ui/button\";`, add `Copy` to the existing lucide-react import list, and add `import { toast } from \"sonner\";`",
+    "FIX EvaluationView.jsx feature wiring: import TalkRatio and TranscriptViewer and render them inside the evaluation layout. Suggested: `<TalkRatio ratio={evaluation.talk_ratio} />` next to the Score Breakdown row, and `<TranscriptViewer transcript={evaluation.diarized_transcript || evaluation.transcript} />` as a full-width card at the bottom.",
+    "After fix, retest: Analyze a raw transcript -> verify evaluation-view renders, talk-ratio-card/talk-ratio-bar visible with bar reflecting agent_pct/customer_pct, transcript-viewer renders Agent: lines in blue bubbles + Customer: lines in zinc bubbles, copy-coaching-plan-btn copies to clipboard with success toast.",
+    "After fix, retest Analytics tab to confirm leaderboard-card and leaderboard-table render with crown icon on top row."
+  ],
+  "critical_code_review_comments": [
+    "EvaluationView.jsx: undefined identifiers Button/Copy/toast — ESLint default config did not catch this because react/jsx-no-undef is not configured; consider enabling.",
+    "Talk ratio compute_talk_ratio() ignores 'caller'/'client'/'cust' which the regex matches but the if-branch only counts 'agent'/'rep'/'representative' as agent and everything else as customer — currently fine but worth a comment.",
+    "extract_json regex `\\{.*\\}` with DOTALL will greedily match across multiple JSON blobs; works today but fragile.",
+    "/api/transcribe-audio: file size check happens AFTER reading entire file into memory — could be a DoS vector for very large uploads.",
+    "DIARIZE_SYSTEM_PROMPT relies on LLM not paraphrasing, but for very short raw transcripts the LLM may rewrite — there is no post-validation that the labeled output is a strict superset of the input."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "success_rate": {"backend": "100% (20/20 tests)", "frontend": "Auto-label working; EvaluationView feature broken (~30%)"},
+  "test_credentials": "N/A (open access, no auth)",
+  "seed_data_creation": "Tests created and cleaned up TEST_AutoDiarize and TEST_AlreadyDiarized evaluations; one TEST_E2E_Agent eval was created via UI (analyze succeeded server-side even though UI crashed) — main agent may want to delete from history.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is fully verified (20 pytest tests pass, including diarize, auto-diarize on analyze, talk_ratio math, leaderboard sorted by avg_qa, transcribe-audio validation). Only missing piece is EvaluationView.jsx wiring. After main agent adds the 3 imports and renders <TalkRatio/> + <TranscriptViewer/>, just rerun the playwright smoke flow: load sample -> analyze -> assert talk-ratio-card, talk-ratio-bar, transcript-viewer, copy-coaching-plan-btn are visible; click copy-coaching-plan-btn and assert toast appears; switch to analytics tab and assert leaderboard-card + leaderboard-table.",
+  "rca of the issue": "Root cause: EvaluationView.jsx was edited to add Copy plan button (uses Button + Copy icon + toast) but the corresponding imports were never added, AND the requested TalkRatio/TranscriptViewer integration was never implemented in this file. As soon as <EvaluationView/> mounts, ReferenceError: Button is not defined is thrown during JSX evaluation (line ~220 where <Button> is used inside the AI Coaching CardHeader). The error propagates up, React unmounts the tree, leaving a blank page. Reproduction: open app -> paste any 10+ char transcript -> click Analyze Call -> wait ~15s -> page goes white. Mitigation: add `import { Button } from \"../components/ui/button\"`, add `Copy` to the lucide-react import, add `import { toast } from \"sonner\"`, then import and render TalkRatio + TranscriptViewer."
+}

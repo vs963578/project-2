@@ -74,6 +74,24 @@ export default function EvaluationView({ evaluation }) {
     transition: { delay: i * 0.05, duration: 0.3 },
   });
 
+  const handleCopyCoachingPlan = async () => {
+    const plan =
+      `COACHING PLAN — ${evaluation.agent_name}\n` +
+      (evaluation.call_id ? `Call: ${evaluation.call_id}\n` : "") +
+      `QA Score: ${evaluation.qa_score}/100\n\n` +
+      `TIPS:\n${(evaluation.coaching_tips || [])
+        .map((t, i) => `${i + 1}. ${t}`)
+        .join("\n")}\n\n` +
+      `IDEAL RESPONSE:\n"${evaluation.ideal_response}"\n\n` +
+      `MOTIVATION:\n${evaluation.motivation}\n`;
+    try {
+      await navigator.clipboard.writeText(plan);
+      toast.success("Coaching plan copied to clipboard");
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="evaluation-view">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -194,11 +212,22 @@ export default function EvaluationView({ evaluation }) {
         {/* AI Coaching */}
         <motion.div {...stagger(4)}>
           <Card className="h-full border-zinc-200 shadow-sm bg-gradient-to-br from-white to-blue-50/50">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
               <CardTitle className="text-lg font-display tracking-tight flex items-center gap-2">
                 <Lightbulb className="w-5 h-5 text-blue-600" />
                 AI Coaching
               </CardTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleCopyCoachingPlan}
+                data-testid="copy-coaching-plan-btn"
+                className="h-8 border-zinc-300 text-xs"
+              >
+                <Copy className="w-3.5 h-3.5 mr-1.5" />
+                Copy plan
+              </Button>
             </CardHeader>
             <CardContent className="space-y-5">
               <div>
