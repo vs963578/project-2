@@ -21,3 +21,8 @@ export const apiLeaderboard = () => axios.get(`${API}/analytics/leaderboard`).th
 export const apiDigestPreview = (days = 7) => axios.get(`${API}/digest/preview`, { params: { days } }).then(r => r.data);
 export const apiDigestSendSlack = (days = 7) => axios.post(`${API}/digest/send-slack`, null, { params: { days } }).then(r => r.data);
 export const apiDigestConfig = () => axios.get(`${API}/digest/config`).then(r => r.data);
+export const apiListAgents = () => axios.get(`${API}/agents`).then(r => r.data);
+export const apiCreateAgent = (payload) => axios.post(`${API}/agents`, payload).then(r => r.data);
+export const apiDeleteAgent = (id) => axios.delete(`${API}/agents/${id}`).then(r => r.data);
+export const apiSendAgentEmails = (days = 7) => axios.post(`${API}/digest/send-agent-emails`, null, { params: { days } }).then(r => r.data);
+export const apiPreviewAgentEmail = (id, days = 7) => axios.post(`${API}/digest/preview-agent-email/${id}`, null, { params: { days } }).then(r => r.data);

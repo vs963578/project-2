@@ -15,9 +15,11 @@ import {
   Cell,
   Legend,
 } from "recharts";
-import { apiAnalytics } from "../lib/api";
+import { apiAnalytics, apiDigestConfig } from "../lib/api";
 import { TrendingUp, AlertOctagon, BarChart3, Activity } from "lucide-react";
 import Leaderboard from "./Leaderboard";
+import DigestPanel from "./DigestPanel";
+import AgentsPanel from "./AgentsPanel";
 
 const StatCard = ({ label, value, suffix, icon: Icon, tone = "default" }) => {
   const toneClass =
@@ -57,9 +59,11 @@ const PIE_COLORS = {
 
 export default function AnalyticsDashboard({ refreshKey }) {
   const [data, setData] = useState(null);
+  const [config, setConfig] = useState(null);
 
   useEffect(() => {
     apiAnalytics().then(setData).catch(() => setData(null));
+    apiDigestConfig().then(setConfig).catch(() => setConfig(null));
   }, [refreshKey]);
 
   if (!data) {
@@ -212,6 +216,11 @@ export default function AnalyticsDashboard({ refreshKey }) {
       <Leaderboard refreshKey={refreshKey} />
 
       <DigestPanel />
+
+      <AgentsPanel
+        emailConfigured={!!config?.email_configured}
+        senderEmail={config?.sender_email}
+      />
     </div>
   );
 }

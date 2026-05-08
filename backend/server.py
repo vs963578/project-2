@@ -15,8 +15,10 @@ from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
 import io
+import asyncio
 from datetime import timedelta
 import httpx
+import resend
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -26,6 +28,10 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 EMERGENT_LLM_KEY = os.environ['EMERGENT_LLM_KEY']
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev').strip()
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 app = FastAPI(title="BPO QA Analyzer API")
 api_router = APIRouter(prefix="/api")
@@ -673,6 +679,224 @@ class DigestPreviewQuery(BaseModel):
     days: int = 7
 
 
+# ---------- Agents Collection ----------
+
+from pydantic import EmailStr
+
+
+class AgentBase(BaseModel):
+    name: str
+    email: EmailStr
+
+
+class Agent(AgentBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@api_router.get("/agents", response_model=List[Agent])
+async def list_agents():
+    docs = await db.agents.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for d in docs:
+        if isinstance(d.get('created_at'), str):
+            d['created_at'] = datetime.fromisoformat(d['created_at'])
+    return docs
+
+
+@api_router.post("/agents", response_model=Agent)
+async def create_agent(agent: AgentBase):
+    name = agent.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Agent name is required.")
+    existing = await db.agents.find_one({"name": name}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Agent '{name}' already exists.")
+    obj = Agent(name=name, email=agent.email)
+    doc = obj.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.agents.insert_one(doc)
+    return obj
+
+
+@api_router.delete("/agents/{agent_id}")
+async def delete_agent(agent_id: str):
+    res = await db.agents.delete_one({"id": agent_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"deleted": True}
+
+
+def _build_agent_weakness(agent_name: str, docs: List[dict]) -> dict:
+    """Aggregate calls for a single agent into a coaching summary."""
+    n = len(docs)
+    if n == 0:
+        return {"agent_name": agent_name, "total_calls": 0}
+
+    qa_avg = round(sum(int(d.get("qa_score", 0) or 0) for d in docs) / n, 1)
+    sub_keys = ["greeting_score", "communication_score", "resolution_score", "compliance_score"]
+    sub_labels = {
+        "greeting_score": "Greeting",
+        "communication_score": "Communication",
+        "resolution_score": "Resolution",
+        "compliance_score": "Compliance",
+    }
+    sub_avgs = []
+    for k in sub_keys:
+        vals = [int(d.get(k, 0) or 0) for d in docs]
+        sub_avgs.append({"key": k, "label": sub_labels[k], "avg": round(sum(vals) / n, 1)})
+    sub_avgs.sort(key=lambda x: x["avg"])
+    weakest = sub_avgs[:3]
+
+    # Pick representative coaching examples from low-scoring calls
+    sorted_calls = sorted(docs, key=lambda d: int(d.get("qa_score", 0) or 0))
+    examples = []
+    for d in sorted_calls[:3]:
+        tip = (d.get("coaching_tips") or [None])[0]
+        examples.append({
+            "call_id": d.get("call_id") or "—",
+            "qa_score": int(d.get("qa_score", 0) or 0),
+            "tip": tip,
+            "ideal_response": d.get("ideal_response") or "",
+        })
+
+    motivations = [d.get("motivation") for d in docs if d.get("motivation")]
+    motivation = motivations[0] if motivations else (
+        "Every call is a chance to grow. Small, deliberate improvements compound into big wins."
+    )
+
+    escalations = sum(1 for d in docs if (d.get("escalation_required") or "no").lower() == "yes")
+
+    return {
+        "agent_name": agent_name,
+        "total_calls": n,
+        "avg_qa": qa_avg,
+        "escalations": escalations,
+        "weakest": weakest,
+        "examples": examples,
+        "motivation": motivation,
+    }
+
+
+def _agent_email_html(summary: dict, days: int) -> str:
+    if summary["total_calls"] == 0:
+        return f"""
+        <div style="font-family: -apple-system, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #18181b;">
+          <h2 style="margin: 0 0 8px; font-size: 22px;">Hi {summary['agent_name']},</h2>
+          <p style="color: #52525b; font-size: 14px;">No calls were evaluated for you in the last {days} days. Keep up the great work!</p>
+        </div>
+        """
+
+    weak_rows = "".join(
+        f"""
+        <tr>
+          <td style="padding: 8px 12px; font-size: 13px; color: #18181b; font-weight: 600;">{w['label']}</td>
+          <td style="padding: 8px 12px; font-size: 13px; color: #52525b; text-align: right; font-variant-numeric: tabular-nums;">{w['avg']}/10</td>
+        </tr>
+        """ for w in summary["weakest"]
+    )
+
+    example_rows = "".join(
+        f"""
+        <div style="border-left: 3px solid #2563eb; padding: 8px 14px; margin: 14px 0; background: #f4f4f5;">
+          <div style="font-size: 12px; color: #71717a; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Call {ex['call_id']} — Score {ex['qa_score']}/100</div>
+          {f'<div style="margin-top:6px; font-size:13px; color:#18181b;"><strong>Coaching tip:</strong> {ex["tip"]}</div>' if ex.get("tip") else ""}
+          {f'<div style="margin-top:6px; font-size:13px; color:#3f3f46; font-style:italic;">Ideal response: "{ex["ideal_response"]}"</div>' if ex.get("ideal_response") else ""}
+        </div>
+        """ for ex in summary["examples"]
+    )
+
+    return f"""
+    <div style="font-family: -apple-system, Helvetica, sans-serif; max-width: 640px; margin: 0 auto; padding: 32px 24px; color: #18181b; background: #ffffff;">
+      <div style="border-bottom: 1px solid #e4e4e7; padding-bottom: 20px; margin-bottom: 24px;">
+        <div style="font-size: 11px; color: #71717a; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;">ClarityQA Weekly Coaching</div>
+        <h1 style="margin: 8px 0 0; font-size: 26px; letter-spacing: -0.02em;">Hi {summary['agent_name']},</h1>
+        <p style="color: #52525b; font-size: 14px; margin: 8px 0 0;">Here's your personal coaching summary for the last {days} days.</p>
+      </div>
+
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+        <tr>
+          <td style="padding: 0 12px 12px 0;">
+            <div style="font-size: 11px; color: #71717a; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;">Avg QA</div>
+            <div style="font-size: 28px; font-weight: 700; color: #18181b; margin-top: 4px;">{summary['avg_qa']}<span style="font-size: 14px; color:#a1a1aa;">/100</span></div>
+          </td>
+          <td style="padding: 0 12px 12px 0;">
+            <div style="font-size: 11px; color: #71717a; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;">Calls</div>
+            <div style="font-size: 28px; font-weight: 700; color: #18181b; margin-top: 4px;">{summary['total_calls']}</div>
+          </td>
+          <td style="padding: 0 0 12px 0;">
+            <div style="font-size: 11px; color: #71717a; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600;">Escalations</div>
+            <div style="font-size: 28px; font-weight: 700; color: {'#dc2626' if summary['escalations']>0 else '#16a34a'}; margin-top: 4px;">{summary['escalations']}</div>
+          </td>
+        </tr>
+      </table>
+
+      <h2 style="font-size: 16px; margin: 24px 0 8px;">Top 3 areas to focus on</h2>
+      <table style="width: 100%; border-collapse: collapse; border: 1px solid #e4e4e7; border-radius: 6px;">
+        {weak_rows}
+      </table>
+
+      <h2 style="font-size: 16px; margin: 28px 0 4px;">Coaching examples from your calls</h2>
+      {example_rows}
+
+      <div style="margin-top: 28px; padding: 16px 18px; background: #eff6ff; border-radius: 6px; border: 1px solid #bfdbfe;">
+        <div style="font-size: 11px; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;">Motivation</div>
+        <div style="margin-top: 6px; font-size: 14px; color: #1e3a8a; line-height: 1.6;">{summary['motivation']}</div>
+      </div>
+
+      <div style="border-top: 1px solid #e4e4e7; margin-top: 32px; padding-top: 16px; font-size: 11px; color: #a1a1aa; text-align: center;">
+        Sent by ClarityQA &middot; AI-powered call quality intelligence
+      </div>
+    </div>
+    """
+
+
+async def _send_email_resend(to_email: str, subject: str, html: str) -> dict:
+    if not RESEND_API_KEY:
+        raise HTTPException(status_code=400, detail="RESEND_API_KEY is not configured.")
+    params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html}
+    return await asyncio.to_thread(resend.Emails.send, params)
+
+
+@api_router.post("/digest/send-agent-emails")
+async def digest_send_agent_emails(days: int = 7):
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
+    if not RESEND_API_KEY:
+        raise HTTPException(status_code=400, detail="Email not configured. Set RESEND_API_KEY in backend/.env.")
+
+    agents = await db.agents.find({}, {"_id": 0}).to_list(500)
+    if not agents:
+        raise HTTPException(status_code=400, detail="No agents configured. Add agents first.")
+
+    docs = await _fetch_recent_evaluations(days)
+
+    sent, failed = [], []
+    for agent in agents:
+        agent_docs = [d for d in docs if (d.get("agent_name") or "").strip().lower() == agent["name"].strip().lower()]
+        summary = _build_agent_weakness(agent["name"], agent_docs)
+        subject = f"Your ClarityQA coaching — last {days} days"
+        html = _agent_email_html(summary, days)
+        try:
+            res = await _send_email_resend(agent["email"], subject, html)
+            sent.append({"agent": agent["name"], "email": agent["email"], "id": res.get("id"), "calls": summary["total_calls"]})
+        except Exception as e:
+            logger.exception("Email send failed for %s", agent.get("email"))
+            failed.append({"agent": agent["name"], "email": agent["email"], "error": str(e)[:200]})
+
+    return {"sent": sent, "failed": failed, "total_agents": len(agents)}
+
+
+@api_router.post("/digest/preview-agent-email/{agent_id}")
+async def preview_agent_email(agent_id: str, days: int = 7):
+    agent = await db.agents.find_one({"id": agent_id}, {"_id": 0})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    docs = await _fetch_recent_evaluations(days)
+    agent_docs = [d for d in docs if (d.get("agent_name") or "").strip().lower() == agent["name"].strip().lower()]
+    summary = _build_agent_weakness(agent["name"], agent_docs)
+    return {"summary": summary, "html": _agent_email_html(summary, days)}
+
+
 @api_router.get("/digest/preview")
 async def digest_preview(days: int = 7):
     if days < 1 or days > 90:
@@ -727,7 +951,7 @@ async def digest_send_slack(days: int = 7):
 
 @api_router.get("/digest/config")
 async def digest_config():
-    """Return whether Slack is configured (without exposing the secrets)."""
+    """Return whether Slack/Email is configured (without exposing the secrets)."""
     has_webhook = bool(os.environ.get("SLACK_WEBHOOK_URL", "").strip())
     bot = os.environ.get("SLACK_BOT_TOKEN", "").strip()
     channel = os.environ.get("SLACK_CHANNEL_ID", "").strip()
@@ -735,6 +959,8 @@ async def digest_config():
         "slack_webhook_configured": has_webhook,
         "slack_bot_configured": bool(bot and channel),
         "channel_id": channel if (bot and channel) else None,
+        "email_configured": bool(RESEND_API_KEY),
+        "sender_email": SENDER_EMAIL if RESEND_API_KEY else None,
     }
 
 

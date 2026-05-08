@@ -1,0 +1,53 @@
+{
+  "summary": "Iteration 4 — Auto-Coach Per-Agent Weekly Email feature tested end-to-end. Backend: 9/9 relevant pytest tests pass (1 skipped because existing agents were present). Frontend: AgentsPanel renders in Analytics tab, add/preview/send-all/delete flows all work, Resend sandbox failures surface correctly in the 'failed' list (endpoint returns 200, does NOT 500). Pre-existing flows (digest preview, leaderboard, send-slack 400) still work.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Analytics tab > Auto-Coach Digest panel", "issues": ["Badge still reads 'Email coming soon' in the Slack digest panel even though RESEND_API_KEY is now configured. The Email sending functionality is implemented in the separate AgentsPanel below, but the old DigestPanel's 'Email coming soon' chip becomes confusing/misleading — consider removing that chip or renaming it to 'Per-agent emails below ↓'."]},
+      {"screen": "Email preview dialog", "issues": ["Accessibility warning in console: 'Missing Description or aria-describedby={undefined} for {DialogContent}'. Add a DialogDescription (or aria-describedby) to the preview Dialog in AgentsPanel.jsx to satisfy Radix UI a11y."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_agent_emails.py",
+    "/app/test_reports/pytest/pytest_agent_emails.xml"
+  ],
+  "verified_flows": [
+    "GET /api/digest/config => email_configured=true, sender_email=onboarding@resend.dev",
+    "POST /api/agents creates agent {name,email}; duplicate name => 409; response has no _id",
+    "GET /api/agents lists agents sorted by created_at desc, no _id leak",
+    "DELETE /api/agents/{id} removes agent and returns {deleted:true}; repeat delete => 404",
+    "POST /api/digest/preview-agent-email/{id}?days=7 => {summary:{agent_name,total_calls,...}, html:'<div ...>'}; unknown id => 404",
+    "POST /api/digest/send-agent-emails?days=7 => 200 with {sent:[],failed:[{agent,email,error:'You can only send testing emails to your own email address...'}],total_agents:2} — Resend 403 properly caught, no 500",
+    "Frontend: AgentsPanel renders with agents-panel + agents-table; agent-add-btn creates row; agent-preview-{id} opens dialog with email HTML in agent-email-preview (377-char 'No calls evaluated' template for new agent); email-all-agents-btn triggers send endpoint (console log 'Email failures: [Object, Object]' seen -> toast.warning path hit); agent-delete-{id} removes row; agent-period-14/30 togglable",
+    "Existing flows: /api/analytics/leaderboard OK, /api/digest/preview?days=7 returns plain_text, /api/digest/send-slack returns 400 (unconfigured, intentional)"
+  ],
+  "action_items": [
+    "OPTIONAL (design): Remove or rename the 'Email coming soon' chip in DigestPanel since per-agent email IS now configured via the AgentsPanel below.",
+    "OPTIONAL (a11y): Add <DialogDescription> inside the preview Dialog in AgentsPanel.jsx (line ~277) to silence 'Missing Description or aria-describedby' Radix warning.",
+    "CLEANUP: A pre-seeded 'Sarah Khan / sarah@test.com' agent row is present in Mongo from earlier development. Harmless but users may want to delete it via the UI trash icon."
+  ],
+  "critical_code_review_comments": [
+    "server.py:853 _send_email_resend correctly wraps the blocking resend SDK via asyncio.to_thread — good.",
+    "server.py:879-884 try/except around _send_email_resend per-agent prevents one bad email from taking down the whole batch — correct pattern.",
+    "server.py:682-726 agent CRUD uses {'_id':0} projection in list_agents + model response — no ObjectId leak, verified.",
+    "server.py:689 AgentBase uses EmailStr from pydantic — requires email-validator package. Confirmed installed (pytest passed POST /api/agents with valid email).",
+    "server.py:868 'if not agents' raises 400 before hitting Resend — matches spec.",
+    "AgentsPanel.jsx:93-120 handleSendAll differentiates toast.warning (partial failure) vs toast.success — UX is good.",
+    "AgentsPanel.jsx 'Email coming soon' is actually in DigestPanel.jsx (different file) — should be updated separately.",
+    "Minor: preview dialog lacks DialogDescription (a11y warning), agent-email-preview uses dangerouslySetInnerHTML (acceptable since HTML comes from our own backend template, but worth noting)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_agent_emails.py (new)"
+  ],
+  "success_rate": {"backend": "100% (9/9 run, 1 skipped env-dependent)", "frontend": "100% (add, preview, send-all, delete, period toggle all verified)"},
+  "test_credentials": "N/A (open access, no auth)",
+  "seed_data_creation": "Test agents created with 'TEST_' prefix are auto-cleaned by pytest fixture. One E2E_Agent_68187 was created via UI and then deleted. Pre-existing 'Sarah Khan / sarah@test.com' remains from earlier dev.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auto-Coach agent email feature is fully functional. Backend pytest regression lives at /app/backend/tests/test_agent_emails.py (run: pytest /app/backend/tests/ -v). Resend is in sandbox mode — unverified recipients return error 'You can only send testing emails to your own email address (rajenterprises827014@gmail.com)' which the endpoint catches and returns in failed[]. Two minor design nits only (see design_issues). No functional blockers."
+}
