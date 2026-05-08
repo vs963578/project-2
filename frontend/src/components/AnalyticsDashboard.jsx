@@ -210,6 +210,8 @@ export default function AnalyticsDashboard({ refreshKey }) {
       </div>
 
       <Leaderboard refreshKey={refreshKey} />
+
+      <DigestPanel />
     </div>
   );
 }

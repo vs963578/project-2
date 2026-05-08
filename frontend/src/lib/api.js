@@ -18,3 +18,6 @@ export const apiTranscribeAudio = (formData, onProgress) =>
 export const apiDiarize = (transcript) =>
   axios.post(`${API}/diarize`, { transcript }).then(r => r.data);
 export const apiLeaderboard = () => axios.get(`${API}/analytics/leaderboard`).then(r => r.data);
+export const apiDigestPreview = (days = 7) => axios.get(`${API}/digest/preview`, { params: { days } }).then(r => r.data);
+export const apiDigestSendSlack = (days = 7) => axios.post(`${API}/digest/send-slack`, null, { params: { days } }).then(r => r.data);
+export const apiDigestConfig = () => axios.get(`${API}/digest/config`).then(r => r.data);

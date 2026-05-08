@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai import OpenAISpeechToText
 import io
+from datetime import timedelta
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -492,6 +494,248 @@ async def transcribe_audio(file: UploadFile = File(...), diarize: bool = True):
             logger.exception("Post-Whisper diarization failed; returning raw transcript")
 
     return {"transcript": text, "filename": filename, "diarized": diarized}
+
+
+# ---------- Weekly Digest ----------
+
+def _score_color_emoji(s: int) -> str:
+    if s >= 80:
+        return ":large_green_circle:"
+    if s >= 60:
+        return ":large_blue_circle:"
+    if s >= 40:
+        return ":large_orange_circle:"
+    return ":red_circle:"
+
+
+async def _fetch_recent_evaluations(days: int = 7) -> List[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    docs = await db.evaluations.find({}, {"_id": 0}).to_list(2000)
+    out = []
+    for d in docs:
+        c = d.get("created_at")
+        if isinstance(c, str):
+            try:
+                c_dt = datetime.fromisoformat(c.replace("Z", "+00:00"))
+            except Exception:
+                continue
+        elif isinstance(c, datetime):
+            c_dt = c if c.tzinfo else c.replace(tzinfo=timezone.utc)
+        else:
+            continue
+        if c_dt >= cutoff:
+            out.append(d)
+    out.sort(key=lambda d: d.get("created_at"), reverse=True)
+    return out
+
+
+def _build_digest(docs: List[dict], days: int) -> dict:
+    total = len(docs)
+    if total == 0:
+        return {
+            "total_calls": 0,
+            "avg_qa": 0,
+            "escalations": 0,
+            "lowest_calls": [],
+            "agent_rankings": [],
+            "top_compliance_issues": [],
+            "period_days": days,
+        }
+
+    avg_qa = round(sum(int(d.get("qa_score", 0) or 0) for d in docs) / total, 1)
+    escalations = sum(1 for d in docs if (d.get("escalation_required") or "no").lower() == "yes")
+
+    lowest = sorted(docs, key=lambda d: int(d.get("qa_score", 0) or 0))[:3]
+    lowest_calls = [
+        {
+            "agent_name": d.get("agent_name") or "Unknown Agent",
+            "call_id": d.get("call_id") or "—",
+            "qa_score": int(d.get("qa_score", 0) or 0),
+            "root_cause": (d.get("root_cause") or "")[:160],
+            "risk_level": (d.get("risk_level") or "low").lower(),
+        }
+        for d in lowest
+    ]
+
+    by_agent: dict = {}
+    for d in docs:
+        name = (d.get("agent_name") or "Unknown Agent").strip() or "Unknown Agent"
+        b = by_agent.setdefault(name, {"name": name, "calls": 0, "qa_total": 0, "esc": 0})
+        b["calls"] += 1
+        b["qa_total"] += int(d.get("qa_score", 0) or 0)
+        if (d.get("escalation_required") or "no").lower() == "yes":
+            b["esc"] += 1
+    rankings = []
+    for b in by_agent.values():
+        rankings.append({
+            "name": b["name"],
+            "calls": b["calls"],
+            "avg_qa": round(b["qa_total"] / b["calls"], 1) if b["calls"] else 0,
+            "escalation_rate": round((b["esc"] / b["calls"]) * 100, 1) if b["calls"] else 0,
+        })
+    rankings.sort(key=lambda r: (r["avg_qa"], r["calls"]), reverse=True)
+
+    issue_counter: dict = {}
+    for d in docs:
+        for issue in (d.get("compliance_issues") or []):
+            k = issue.strip()
+            if k:
+                issue_counter[k] = issue_counter.get(k, 0) + 1
+    top_issues = sorted(issue_counter.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    return {
+        "total_calls": total,
+        "avg_qa": avg_qa,
+        "escalations": escalations,
+        "escalation_rate": round((escalations / total) * 100, 1),
+        "lowest_calls": lowest_calls,
+        "agent_rankings": rankings,
+        "top_compliance_issues": [{"issue": k, "count": v} for k, v in top_issues],
+        "period_days": days,
+    }
+
+
+def _digest_to_slack_blocks(d: dict) -> dict:
+    period = f"Last {d['period_days']} days"
+    if d["total_calls"] == 0:
+        return {
+            "text": f"*ClarityQA Weekly Digest* — no calls evaluated in the {period.lower()}.",
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": "ClarityQA Weekly Digest"}},
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"_No calls evaluated in {period.lower()}._"}},
+            ],
+        }
+
+    summary_md = (
+        f"*Total calls:* {d['total_calls']}    "
+        f"*Avg QA:* {d['avg_qa']}/100    "
+        f"*Escalations:* {d['escalations']} ({d.get('escalation_rate', 0)}%)"
+    )
+
+    lowest_md = "\n".join(
+        f"{_score_color_emoji(c['qa_score'])} *{c['agent_name']}* — `{c['call_id']}` — *{c['qa_score']}/100*  _({c['risk_level']} risk)_\n> {c['root_cause']}"
+        for c in d["lowest_calls"]
+    ) or "_None_"
+
+    rankings_md = "\n".join(
+        f"{i+1}. *{r['name']}* — {r['avg_qa']}/100 ({r['calls']} calls, {r['escalation_rate']}% escalation)"
+        for i, r in enumerate(d["agent_rankings"][:5])
+    ) or "_None_"
+
+    issues_md = "\n".join(
+        f"• {it['issue']} (×{it['count']})" for it in d["top_compliance_issues"]
+    ) or "_No recurring issues_"
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": ":bar_chart: ClarityQA Weekly Digest"}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": period}]},
+        {"type": "section", "text": {"type": "mrkdwn", "text": summary_md}},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*:warning: Lowest-scoring calls (coach these first)*\n" + lowest_md}},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*:trophy: Agent leaderboard*\n" + rankings_md}},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*:no_entry: Top compliance issues*\n" + issues_md}},
+    ]
+    return {
+        "text": f"ClarityQA Weekly Digest — {d['total_calls']} calls, avg {d['avg_qa']}/100",
+        "blocks": blocks,
+    }
+
+
+def _digest_to_plain_text(d: dict) -> str:
+    period = f"Last {d['period_days']} days"
+    if d["total_calls"] == 0:
+        return f"ClarityQA Weekly Digest — no calls evaluated in {period.lower()}."
+
+    lines = [
+        "CLARITYQA WEEKLY DIGEST",
+        period,
+        "",
+        f"Total calls: {d['total_calls']}    Avg QA: {d['avg_qa']}/100    Escalations: {d['escalations']} ({d.get('escalation_rate', 0)}%)",
+        "",
+        "LOWEST-SCORING CALLS:",
+    ]
+    for c in d["lowest_calls"]:
+        lines.append(f"  • {c['agent_name']} ({c['call_id']}) — {c['qa_score']}/100 [{c['risk_level']} risk]")
+        if c["root_cause"]:
+            lines.append(f"    Root cause: {c['root_cause']}")
+    lines += ["", "AGENT LEADERBOARD:"]
+    for i, r in enumerate(d["agent_rankings"][:5]):
+        lines.append(f"  {i+1}. {r['name']} — {r['avg_qa']}/100 ({r['calls']} calls, {r['escalation_rate']}% escalation)")
+    lines += ["", "TOP COMPLIANCE ISSUES:"]
+    for it in d["top_compliance_issues"]:
+        lines.append(f"  • {it['issue']} (x{it['count']})")
+    return "\n".join(lines)
+
+
+class DigestPreviewQuery(BaseModel):
+    days: int = 7
+
+
+@api_router.get("/digest/preview")
+async def digest_preview(days: int = 7):
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
+    docs = await _fetch_recent_evaluations(days)
+    digest = _build_digest(docs, days)
+    digest["plain_text"] = _digest_to_plain_text(digest)
+    return digest
+
+
+@api_router.post("/digest/send-slack")
+async def digest_send_slack(days: int = 7):
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
+
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "").strip()
+    bot_token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    channel_id = os.environ.get("SLACK_CHANNEL_ID", "").strip()
+
+    if not webhook_url and not (bot_token and channel_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Slack not configured. Set SLACK_WEBHOOK_URL in backend/.env, OR set SLACK_BOT_TOKEN (xoxb-...) + SLACK_CHANNEL_ID.",
+        )
+
+    docs = await _fetch_recent_evaluations(days)
+    digest = _build_digest(docs, days)
+    payload = _digest_to_slack_blocks(digest)
+
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        if webhook_url:
+            r = await http.post(webhook_url, json=payload)
+            if r.status_code >= 300:
+                raise HTTPException(status_code=502, detail=f"Slack webhook failed: {r.status_code} {r.text[:200]}")
+            return {"sent": True, "channel": "webhook", "total_calls": digest["total_calls"]}
+
+        # Bot token path
+        body = {"channel": channel_id, **payload}
+        r = await http.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={"Authorization": f"Bearer {bot_token}", "Content-Type": "application/json; charset=utf-8"},
+            json=body,
+        )
+        try:
+            data = r.json()
+        except Exception:
+            raise HTTPException(status_code=502, detail=f"Slack API error: {r.status_code} {r.text[:200]}")
+        if not data.get("ok"):
+            raise HTTPException(status_code=502, detail=f"Slack API error: {data.get('error', 'unknown')}")
+        return {"sent": True, "channel": channel_id, "total_calls": digest["total_calls"]}
+
+
+@api_router.get("/digest/config")
+async def digest_config():
+    """Return whether Slack is configured (without exposing the secrets)."""
+    has_webhook = bool(os.environ.get("SLACK_WEBHOOK_URL", "").strip())
+    bot = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    channel = os.environ.get("SLACK_CHANNEL_ID", "").strip()
+    return {
+        "slack_webhook_configured": has_webhook,
+        "slack_bot_configured": bool(bot and channel),
+        "channel_id": channel if (bot and channel) else None,
+    }
 
 
 app.include_router(api_router)

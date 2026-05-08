@@ -22,9 +22,14 @@ Build an AI system for BPO Quality Assurance, Agent Coaching, and Performance An
 - DELETE `/api/evaluations/{id}` — delete
 - GET `/api/analytics/summary` — total_calls, avg sub-scores, escalation_rate, sentiment & risk breakdowns, top compliance issues, QA-score trend
 - GET `/api/analytics/leaderboard` — per-agent ranking (calls, avg_qa, escalation_rate, negative_rate)
+- GET `/api/digest/preview?days=N` — manager digest payload (lowest calls, leaderboard, top issues, plain-text version)
+- POST `/api/digest/send-slack?days=N` — sends formatted Slack blocks via webhook OR bot token
+- GET `/api/digest/config` — non-secret indicator of whether Slack is configured
 - Frontend: 3 tabs (Analyzer, History, Analytics) — score gauge, sub-score progress bars, **TalkRatio bar chart**, **color-coded TranscriptViewer chat bubbles**, coaching panel with **Copy plan** button, manager insights, recharts visualizations
 - Frontend: "Auto-label speakers" button, "Upload .txt", "Upload audio" buttons in Analyzer
 - Frontend: **Agent Leaderboard** in Analytics tab with crown for top performer
+- Frontend: **Auto-Coach Digest panel** — period selector (7/14/30 days), preview modal, "Send to Slack" button, status badges
+- "Load sample" auto-fills agent name + call ID
 - Tested: 20/20 backend pytest, 8/8 frontend e2e flows
 
 ## Backlog
