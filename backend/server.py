@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -20,6 +20,15 @@ from datetime import timedelta
 import httpx
 import resend
 
+from auth import (
+    AuthDep,
+    create_access_token,
+    hash_password,
+    public_user,
+    seed_manager,
+    verify_password,
+)
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -36,8 +45,75 @@ if RESEND_API_KEY:
 app = FastAPI(title="BPO QA Analyzer API")
 api_router = APIRouter(prefix="/api")
 
+auth_dep = AuthDep(db)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def _startup():
+    try:
+        await db.users.create_index("email", unique=True)
+    except Exception:
+        logger.exception("Failed to create users.email index")
+    try:
+        await seed_manager(db)
+    except Exception:
+        logger.exception("Failed to seed manager")
+
+
+# ---------- Auth Models & Routes ----------
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+@api_router.post("/auth/register")
+async def register(payload: RegisterIn):
+    email = payload.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email is required.")
+    if len(payload.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+    user_id = str(uuid.uuid4())
+    doc = {
+        "id": user_id,
+        "email": email,
+        "name": (payload.name or email.split("@")[0]).strip(),
+        "role": "agent",  # self-registration = agent role
+        "password_hash": hash_password(payload.password),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(doc)
+    token = create_access_token(user_id, email, "agent")
+    return {"access_token": token, "token_type": "bearer", "user": public_user(doc)}
+
+
+@api_router.post("/auth/login")
+async def login(payload: LoginIn):
+    email = payload.email.strip().lower()
+    user = await db.users.find_one({"email": email}, {"_id": 0})
+    if not user or not verify_password(payload.password, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    token = create_access_token(user["id"], user["email"], user.get("role", "agent"))
+    return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
+
+
+@api_router.get("/auth/me")
+async def me(request: Request):
+    user = await auth_dep.get_current_user(request)
+    return public_user(user)
 
 
 # ---------- Models ----------
