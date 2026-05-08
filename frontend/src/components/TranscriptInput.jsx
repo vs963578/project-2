@@ -172,7 +172,11 @@ export default function TranscriptInput({ onAnalyzed }) {
               <button
                 type="button"
                 className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-                onClick={() => setTranscript(SAMPLE_TRANSCRIPT)}
+                onClick={() => {
+                  setTranscript(SAMPLE_TRANSCRIPT);
+                  if (!agentName) setAgentName("Sarah Khan");
+                  if (!callId) setCallId("CALL-DEMO-001");
+                }}
                 data-testid="load-sample-btn"
               >
                 Load sample
