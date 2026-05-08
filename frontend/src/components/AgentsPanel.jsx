@@ -6,6 +6,7 @@ import { Label } from "../components/ui/label";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogFooter,
@@ -279,6 +280,9 @@ export default function AgentsPanel({ emailConfigured, senderEmail }) {
             <DialogTitle className="font-display tracking-tight">
               Email preview — {previewName}
             </DialogTitle>
+            <DialogDescription>
+              This is exactly what {previewName} will receive in their inbox.
+            </DialogDescription>
           </DialogHeader>
           <div
             className="border border-zinc-200 rounded-md bg-white"

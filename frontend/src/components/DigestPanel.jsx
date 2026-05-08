@@ -114,7 +114,7 @@ export default function DigestPanel() {
           </Badge>
           <Badge className="bg-zinc-100 text-zinc-700" data-testid="email-status-badge">
             <Mail className="w-3 h-3 mr-1" />
-            Email coming soon
+            Per-agent emails below
           </Badge>
         </div>
 
