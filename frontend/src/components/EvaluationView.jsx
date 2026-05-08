@@ -1,9 +1,11 @@
 import React from "react";
 import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Progress } from "../components/ui/progress";
 import { Separator } from "../components/ui/separator";
 import { motion } from "framer-motion";
+import { toast } from "sonner";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -13,8 +15,11 @@ import {
   Target,
   ShieldAlert,
   MessageSquare,
+  Copy,
 } from "lucide-react";
 import { ScoreGauge } from "./ScoreGauge";
+import TalkRatio from "./TalkRatio";
+import TranscriptViewer from "./TranscriptViewer";
 
 const sentimentStyles = {
   positive: "bg-green-100 text-green-800 hover:bg-green-100",
@@ -141,6 +146,22 @@ export default function EvaluationView({ evaluation }) {
           </Card>
         </motion.div>
       </div>
+
+      {/* Talk Ratio + Diarized Transcript */}
+      {(evaluation.talk_ratio || evaluation.diarized_transcript) && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {evaluation.talk_ratio && (
+            <motion.div {...stagger(2)} className="lg:col-span-1">
+              <TalkRatio ratio={evaluation.talk_ratio} />
+            </motion.div>
+          )}
+          {evaluation.diarized_transcript && (
+            <motion.div {...stagger(3)} className="lg:col-span-2">
+              <TranscriptViewer transcript={evaluation.diarized_transcript} />
+            </motion.div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Compliance & Missed Steps */}
